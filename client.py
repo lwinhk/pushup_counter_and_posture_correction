@@ -2,12 +2,46 @@ import cv2
 import socket
 import numpy as np
 import sys
+import os
 
 if sys.platform == "Linux":
     from picamera2 import Picamera2
 
-HOST = "192.168.1.146"
+# set default values
+HOST = "127.0.0.1"   # listen on all interfaces
 PORT = 5005
+
+# check env variables
+# server_ip = os.environ.get('server_ip')
+# if server_ip:
+#     HOST = server_ip
+
+client_id = input("Choose client ID [1, 2].\n")
+
+print(client_id)
+
+if int(client_id) == 1:
+    client_ip = os.environ.get('client1_ip')
+    if client_ip:
+        HOST = client_ip
+    
+    client_port = os.environ.get('client1_port')
+    if client_port:
+        PORT = client_port
+
+elif int(client_id) == 2:
+    client_ip = os.environ.get('client2_ip')
+    if client_ip:
+        HOST = client_ip
+    
+    client_port = os.environ.get('client2_port')
+    if client_port:
+        PORT = client_port
+
+else:
+    print("Invalid client ID. Existing...")
+    sys.exit(0)
+
 MAX_UDP = 65507          # absolute max UDP payload
 TARGET_MAX = 60000       # stay safely under the max
 FRAME_WIDTH = 640
@@ -55,6 +89,7 @@ def main():
             if not ok:
                 continue
 
+            # frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             payload = encode_jpeg_under_limit(frame)
 
         if payload is None or len(payload) > MAX_UDP:

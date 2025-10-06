@@ -3,7 +3,7 @@ import socket
 import numpy as np
 import sys
 
-HOST = "192.168.1.146"
+HOST = "127.0.0.1"
 PORT = 5006
 MAX_UDP = 65507          # absolute max UDP payload
 TARGET_MAX = 60000       # stay safely under the max

@@ -8,13 +8,71 @@ import socket
 import numpy as np
 import cvzone
 from cvzone.PoseModule import PoseDetector
+from bigquery import BigQuery
+import sys
+
+# server.py (top of file)
+import logging
+import time
+
+logging.basicConfig(
+    level=logging.DEBUG,  # or INFO to reduce noise
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+# Turn up specific Google/GCP loggers that matter for Storage Write API
+logging.getLogger("google.auth").setLevel(logging.DEBUG)
+logging.getLogger("google.api_core.bidi").setLevel(logging.DEBUG)
+logging.getLogger("google.api_core.retry").setLevel(logging.DEBUG)
+logging.getLogger("google.cloud.bigquery_storage_v1").setLevel(logging.DEBUG)
+logging.getLogger("grpc").setLevel(logging.DEBUG)
 
 HOST1 = "192.168.1.146"
 PORT1 = 5005
 HOST2 = "192.168.1.146"
 PORT2 = 5006
 
+import os
+
+API_KEY = ""
+gc_api_key = os.environ.get('google_cloud_api_key')
+if gc_api_key:
+    API_KEY = gc_api_key
+CLIENT_ID = ""
+gc_client_id = os.environ.get('google_cloud_client_id')
+if gc_client_id:
+    CLIENT_ID = gc_client_id
+CLIENT_SECRET = ""
+gc_client_secret = os.environ.get('google_cloud_client_secret')
+if gc_client_secret:
+    CLIENT_SECRET = gc_client_secret
+
 def main():
+    project_id = "pushup-counter-aut"
+    # dataset_id = "pushup-counter-aut.pushup_dataset"
+    # table_id = "pushup-counter-aut.pushup_dataset.pushup_sessions"
+    dataset_id = "pushup_dataset"
+    table_id = "pushup_sessions"
+    big_query = BigQuery(project_id, dataset_id, table_id, API_KEY)
+    big_query.test()
+
+    data = {
+        "id": 2,
+        "user_id": 3,
+        "counter": 10,
+        "incorrect_counter": 5,
+        "correct_counter": 5,
+        "timestamp": int(time.time()),                 # second
+        "incorrect_counter_perc": "50",                # NUMERIC as string
+        "correct_counter_perc":   "50",                # NUMERIC as string
+        "created_at": "2025-09-30 16:43:00"            # DATETIME literal
+    }
+
+    big_query.simple_send(data)
+
+    return 0
+
     sock1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     # Allow quick rebind after restart
