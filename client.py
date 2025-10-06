@@ -12,7 +12,7 @@ HOST = "127.0.0.1"   # listen on all interfaces
 PORT = 5005
 
 # check env variables
-# server_ip = os.environ.get('server_ip')
+# server_ip = os.getenv('server_ip')
 # if server_ip:
 #     HOST = server_ip
 
@@ -21,22 +21,22 @@ client_id = input("Choose client ID [1, 2].\n")
 print(client_id)
 
 if int(client_id) == 1:
-    client_ip = os.environ.get('client1_ip')
+    client_ip = os.getenv('client1_ip')
     if client_ip:
         HOST = client_ip
     
-    client_port = os.environ.get('client1_port')
+    client_port = os.getenv('client1_port')
     if client_port:
-        PORT = client_port
+        PORT = int(client_port)
 
 elif int(client_id) == 2:
-    client_ip = os.environ.get('client2_ip')
+    client_ip = os.getenv('client2_ip')
     if client_ip:
         HOST = client_ip
     
-    client_port = os.environ.get('client2_port')
+    client_port = os.getenv('client2_port')
     if client_port:
-        PORT = client_port
+        PORT = int(client_port)
 
 else:
     print("Invalid client ID. Existing...")

@@ -16,21 +16,21 @@ PORT1 = 5005
 PORT2 = 5006
 
 # check env variables
-server_ip = os.environ.get('server_ip')
+server_ip = os.getenv('server_ip')
 if server_ip:
     HOST = server_ip
-client1_ip = os.environ.get('client1_ip')
+client1_ip = os.getenv('client1_ip')
 if client1_ip:
     CLIENT1 = client1_ip
-client2_ip = os.environ.get('client2_ip')
+client2_ip = os.getenv('client2_ip')
 if client2_ip:
     CLIENT2 = client2_ip
-client1_port = os.environ.get('client1_port')
+client1_port = os.getenv('client1_port')
 if client1_port:
-    PORT1 = client1_port
-client2_port = os.environ.get('client2_port')
+    PORT1 = int(client1_port)
+client2_port = os.getenv('client2_port')
 if client2_port:
-    PORT2 = client2_port
+    PORT2 = int(client2_port)
 
 user_id = input("Choose user ID [1, 2, 3].\n")
 
