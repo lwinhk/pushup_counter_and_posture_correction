@@ -4,7 +4,7 @@ import numpy as np
 import sys
 import os
 
-if sys.platform == "Linux":
+if sys.platform == "Linux" or sys.platform == "linux":
     from picamera2 import Picamera2
 
 # set default values
@@ -79,7 +79,7 @@ def main():
 
     print(f"Sending UDP JPEG frames to {HOST}:{PORT} (press 'q' in OpenCV window to quit)")
     while True:
-        if sys.platform == "Linux":
+        if sys.platform == "Linux" or sys.platform == "linux":
             frame = camera.capture_array()
             # frame = cv2.resize(frame, (854, 480))
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -104,7 +104,7 @@ def main():
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
     
-    if sys.platform == "Linux":
+    if sys.platform == "Linux" or sys.platform == "linux":
         camera.stop()
     elif sys.platform == "win32" or sys.platform == "Windows":
         cap.release()
