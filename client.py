@@ -66,7 +66,7 @@ def main():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     addr = (HOST, PORT)
 
-    if sys.platform == "Linux":
+    if sys.platform == "Linux" or sys.platform == "linux":
         camera = Picamera2()
         camera.start()
     elif sys.platform == "win32" or sys.platform == "Windows":
