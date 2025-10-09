@@ -7,11 +7,10 @@ import socket, select, cv2, numpy as np
 from cvzone.PoseModule import PoseDetector
 import os
 import sys
+import time
 
 # set default values
-HOST = "127.0.0.1"   # listen on all interfaces
-CLIENT1 = "127.0.0.1"
-CLIENT2 = "127.0.0.1"
+HOST = "0.0.0.0"   # listen on all interfaces
 PORT1 = 5005
 PORT2 = 5006
 
@@ -19,12 +18,6 @@ PORT2 = 5006
 server_ip = os.getenv('server_ip')
 if server_ip:
     HOST = server_ip
-client1_ip = os.getenv('client1_ip')
-if client1_ip:
-    CLIENT1 = client1_ip
-client2_ip = os.getenv('client2_ip')
-if client2_ip:
-    CLIENT2 = client2_ip
 client1_port = os.getenv('client1_port')
 if client1_port:
     PORT1 = int(client1_port)
@@ -52,8 +45,8 @@ def main():
     sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock1.bind((CLIENT1, PORT1))
-    sock2.bind((CLIENT2, PORT2))
+    sock1.bind((HOST, PORT1))
+    sock2.bind((HOST, PORT2))
     sock1.setblocking(False)
     sock2.setblocking(False)
 
@@ -105,6 +98,7 @@ def main():
                 # nothing received yet; keep window responsive
                 print("frames are not available.")
                 cv2.imshow(win, np.zeros((240, 320, 3), dtype=np.uint8))
+                time.sleep(5)
 
             if cv2.waitKey(1) & 0xFF in (ord('q'), ord('Q'), 27):
                 break

@@ -12,28 +12,20 @@ HOST = "127.0.0.1"   # listen on all interfaces
 PORT = 5005
 
 # check env variables
-# server_ip = os.getenv('server_ip')
-# if server_ip:
-#     HOST = server_ip
+server_ip = os.getenv('server_ip')
+if server_ip:
+    HOST = server_ip
 
 client_id = input("Choose client ID [1, 2].\n")
 
 print(client_id)
 
-if int(client_id) == 1:
-    client_ip = os.getenv('client1_ip')
-    if client_ip:
-        HOST = client_ip
-    
+if int(client_id) == 1:    
     client_port = os.getenv('client1_port')
     if client_port:
         PORT = int(client_port)
 
-elif int(client_id) == 2:
-    client_ip = os.getenv('client2_ip')
-    if client_ip:
-        HOST = client_ip
-    
+elif int(client_id) == 2:    
     client_port = os.getenv('client2_port')
     if client_port:
         PORT = int(client_port)
