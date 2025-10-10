@@ -54,6 +54,9 @@ class RgbLed(Device):
 
     def map(self, x, in_min, in_max, out_min, out_max):
         return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+    
+    def get_color(self):
+        return color
 
     def set_color(self, color):
         r_val = (color & 0xff0000) >> 16
@@ -131,3 +134,27 @@ class TouchSwitch(Device):
 
     def destroy(self):
         GPIO.cleanup(self.TOUCH_CHANNEL)
+        
+class Button(Device):
+    BTN_CHANNEL = 31
+    detected = False
+    callback_func = None
+    
+    def __init__(self, callback_func):
+        self.setup()
+        self.callback_func = callback_func
+        
+    def setup(self):
+        GPIO.setmode(GPIO.BOARD)
+        GPIO.setup(self.BTN_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.add_event_detect(self.BTN_CHANNEL, GPIO.BOTH, callback=self.detect, bouncetime=200)
+
+    def detect(self, channel):
+        self.detected = GPIO.input(self.BTN_CHANNEL)
+        self.callback_func(self.detected)
+        
+    def is_detected(self):
+        return self.detected
+
+    def destroy(self):
+        GPIO.cleanup(self.BTN_CHANNEL)
