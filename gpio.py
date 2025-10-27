@@ -25,6 +25,8 @@ class RgbLed(Device):
     GREEN_COLOR = 0x00FF00
     BLUE_COLOR = 0x0000FF
 
+    color = 0x000000
+
     def __init__(self):
         self.setup()
 
@@ -56,9 +58,11 @@ class RgbLed(Device):
         return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
     
     def get_color(self):
-        return color
+        return self.color
 
     def set_color(self, color):
+        self.color = color
+        
         r_val = (color & 0xff0000) >> 16
         g_val = (color & 0x00ff00) >> 8
         b_val = (color & 0x0000ff) >> 0
@@ -151,6 +155,8 @@ class Button(Device):
 
     def detect(self, channel):
         self.detected = GPIO.input(self.BTN_CHANNEL)
+        
+        print("Detected ", self.detected)
         self.callback_func(self.detected)
         
     def is_detected(self):

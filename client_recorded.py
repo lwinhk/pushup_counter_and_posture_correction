@@ -1,10 +1,38 @@
 import cv2
 import socket
-import numpy as np
 import sys
+import os
 
-HOST = "127.0.0.1"
+if sys.platform == "Linux" or sys.platform == "linux":
+    from picamera2 import Picamera2
+
+# set default values
+HOST = "127.0.0.1"   # listen on all interfaces
 PORT = 5006
+
+# check env variables
+server_ip = os.getenv('server_ip')
+if server_ip:
+    HOST = server_ip
+
+client_id = input("Choose client ID [1, 2].\n")
+
+print(client_id)
+
+if int(client_id) == 1:    
+    client_port = os.getenv('client1_port')
+    if client_port:
+        PORT = int(client_port)
+
+elif int(client_id) == 2:    
+    client_port = os.getenv('client2_port')
+    if client_port:
+        PORT = int(client_port)
+
+else:
+    print("Invalid client ID. Existing...")
+    sys.exit(0)
+
 MAX_UDP = 65507          # absolute max UDP payload
 TARGET_MAX = 60000       # stay safely under the max
 FRAME_WIDTH = 640
@@ -29,7 +57,12 @@ def main():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     addr = (HOST, PORT)
 
-    cap = cv2.VideoCapture('vid1.mp4')
+    video_name = input("Enter video name")
+
+    if video_name:
+        cap = cv2.VideoCapture(video_name)
+    else:
+        cap = cv2.VideoCapture('vid1.mp4')
 
     print(f"Sending UDP JPEG frames to {HOST}:{PORT} (press 'q' in OpenCV window to quit)")
     while True:

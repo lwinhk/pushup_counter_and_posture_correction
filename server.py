@@ -3,38 +3,39 @@ Server is the program which receives video frames from the clients and processes
 """
 
 from poses import MediaPipe
-import cv2
-import socket
-import numpy as np
-import cvzone
+import socket, select, cv2, numpy as np
 from cvzone.PoseModule import PoseDetector
-from bigquery import BigQuery
-import sys
-
-# server.py (top of file)
-import logging
+import os
 import time
+from bigquery import BigQuery
+from datetime import datetime
+import math
+from gpio import RgbLed
+from gpio import UltrasonicRanging
+from gpio import Button
+import threading
 
-logging.basicConfig(
-    level=logging.DEBUG,  # or INFO to reduce noise
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-
-# Turn up specific Google/GCP loggers that matter for Storage Write API
-logging.getLogger("google.auth").setLevel(logging.DEBUG)
-logging.getLogger("google.api_core.bidi").setLevel(logging.DEBUG)
-logging.getLogger("google.api_core.retry").setLevel(logging.DEBUG)
-logging.getLogger("google.cloud.bigquery_storage_v1").setLevel(logging.DEBUG)
-logging.getLogger("grpc").setLevel(logging.DEBUG)
-
-HOST1 = "192.168.1.146"
+"""
+Begin environment preparation
+"""
+# set default values for server and client network configuration
+# listen on all interfaces
+HOST = "0.0.0.0"   
 PORT1 = 5005
-HOST2 = "192.168.1.146"
 PORT2 = 5006
 
-import os
+# server and client network configuration from system environment variables
+server_ip = os.getenv('server_ip')
+if server_ip:
+    HOST = server_ip
+client1_port = os.getenv('client1_port')
+if client1_port:
+    PORT1 = int(client1_port)
+client2_port = os.getenv('client2_port')
+if client2_port:
+    PORT2 = int(client2_port)
 
+# big query credentials from system environment variables
 API_KEY = ""
 gc_api_key = os.environ.get('google_cloud_api_key')
 if gc_api_key:
@@ -48,99 +49,420 @@ gc_client_secret = os.environ.get('google_cloud_client_secret')
 if gc_client_secret:
     CLIENT_SECRET = gc_client_secret
 
-def main():
-    project_id = "pushup-counter-aut"
-    # dataset_id = "pushup-counter-aut.pushup_dataset"
-    # table_id = "pushup-counter-aut.pushup_dataset.pushup_sessions"
-    dataset_id = "pushup_dataset"
-    table_id = "pushup_sessions"
-    big_query = BigQuery(project_id, dataset_id, table_id, API_KEY)
-    big_query.test()
+# big query session data
+session_data = None
+user_id = 0
+count = 0
+correct_count = 0
+incorrect_count = 0
 
-    data = {
-        "id": 2,
-        "user_id": 3,
-        "counter": 10,
-        "incorrect_counter": 5,
-        "correct_counter": 5,
-        "timestamp": int(time.time()),                 # second
-        "incorrect_counter_perc": "50",                # NUMERIC as string
-        "correct_counter_perc":   "50",                # NUMERIC as string
-        "created_at": "2025-09-30 16:43:00"            # DATETIME literal
+project_id = "pushup-counter-aut"
+dataset_id = "pushup_dataset"
+table_id = "pushup_sessions"
+big_query = BigQuery(project_id, dataset_id, table_id, API_KEY)
+
+# exercise data
+DOWN = 0
+UP = 1
+direction = DOWN
+
+# sensor data
+color = 0x000000
+RED_COLOR = 0xFF0000
+GREEN_COLOR = 0x00FF00
+touched = False
+MAX_DISTANCE = 1600
+MIN_DISTANCE = 0
+distance = 0
+
+ultrasonic_ranging = None
+rgb_led = None
+button = None
+
+stop_event = None
+
+"""
+End environment preparation
+"""
+
+"""
+Begin functions
+"""
+
+# big data functions
+def begin_session():
+    global user_id, session_data
+    global count, incorrect_count, correct_count
+    
+    session_data = None
+    user_id = 0
+    count = 0
+    incorrect_count = 0
+    correct_count = 0
+
+    print("Begin new session...")
+
+    while True:
+        user_id = input("Choose user ID [1, 2, 3].\n")
+
+        try:
+            user_id = int(user_id)
+    
+            if user_id not in [1, 2, 3]:
+                print("Invalid user ID. Please select again.")
+            else:
+                break
+        except:
+            break
+
+def end_session():
+    global count, incorrect_count, correct_count
+    
+    current_datetime = datetime.now()
+    # session id is to be auto-increment in big query
+    session_id = 0
+    incorrect_count = math.ceil(incorrect_count)
+    correct_count = math.floor(correct_count)
+
+    session_data = {
+        "id": session_id,
+        "user_id": user_id,
+        "counter": int(count),
+        "incorrect_counter": int(incorrect_count),
+        "correct_counter": int(correct_count),
+        "timestamp": int(time.time()),                                              # second
+        #"incorrect_counter_perc": f"{(incorrect_count/count*100):.2f}",             # NUMERIC as string
+        #"correct_counter_perc":   f"{(correct_count/count*100):.2f}",               # NUMERIC as string
+        "incorrect_counter_perc": int(incorrect_count/count*100),
+        "correct_counter_perc": int(correct_count/count*100),
+        "created_at": current_datetime.strftime("%Y-%m-%d %H:%M:%S")                # DATETIME literal
     }
 
-    big_query.simple_send(data)
+    print("Ending session...")
+    big_query.simple_send(session_data)
+    print("Session data is sent to cloud")
+    # restart the session
+    begin_session()
 
-    return 0
+
+# image processing functions
+def speak(text):
+    pass
+
+def decode_jpeg_to_bgr(data: bytes):
+    if not data:
+        return None
+    arr = np.frombuffer(data, dtype=np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    # frame = cv2.imdecode(arr)
+    # frame = np.zeros((300, 300, 3), dtype=np.uint8)
+    return frame
+
+class Position:
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+
+def is_person_present():
+    global distance, MAX_DISTANCE, MIN_DISTANCE
+
+    # user is present in front of ultrasonic sensor and user_id is set
+    return distance >= MIN_DISTANCE and distance <= MAX_DISTANCE and user_id > 0
+
+def is_posture_correct_2(leftShoulder, leftHip, leftKnee, rightShoulder, rightHip, rightKnee):
+    return True
+
+def is_posture_correct(leftWrist, leftShoulder, rightWrist, rightShoulder):
+    if leftWrist.x > leftShoulder.x and rightWrist.x < rightShoulder.x:
+        return True
+
+    return False
+
+def angles(frame, leftShoulderLandMark, leftElbowLandMark, leftWristLandMark, rightShoulderLandMark, rightElbowLandMark, rightWristLandMark, drawPoints):
+    global count, correct_count, incorrect_count
+    global direction
+    global DOWN
+    global UP
+
+    leftShoulder = Position()
+    leftElbow = Position()
+    leftWrist = Position()
+    #leftHip = Position()
+    #leftKnee = Position()
+    rightShoulder = Position()
+    rightElbow = Position()
+    rightWrist = Position()
+    #rightHip = Position()
+    #rightKnee = Position()
+
+    leftShoulder.x, leftShoulder.y = leftShoulderLandMark[0:2]
+    leftElbow.x, leftElbow.y = leftElbowLandMark[0:2]
+    leftWrist.x, leftWrist.y = leftWristLandMark[0:2]
+    #leftHip.x, leftHip.y = leftHipLandMark[0:2]
+    #leftKnee.x, leftKnee.y = leftKneeLandMark[0:2]
+    rightShoulder.x, rightShoulder.y = rightShoulderLandMark[0:2]
+    rightElbow.x, rightElbow.y = rightElbowLandMark[0:2]
+    rightWrist.x, rightWrist.y = rightWristLandMark[0:2]
+    #rightHip.x, rightHip.y = rightHipLandMark[0:2]
+    #rightKnee.x, rightKnee.y = rightKneeLandMark[0:2]
+
+    if drawPoints == True:
+        cv2.circle(frame, (leftShoulder.x, leftShoulder.y), 10, (0, 255, 0), 5)
+        cv2.circle(frame, (leftElbow.x, leftElbow.y), 10, (0, 255, 0), 5)
+        cv2.circle(frame, (leftWrist.x, leftWrist.y), 10, (0, 255, 0), 5)
+        cv2.circle(frame, (rightShoulder.x, rightShoulder.y), 10, (0, 255, 0), 5)
+        cv2.circle(frame, (rightElbow.x, rightElbow.y), 10, (0, 255, 0), 5)
+        cv2.circle(frame, (rightWrist.x, rightWrist.y), 10, (0, 255, 0), 5)
+
+    #posture_correct = is_posture_correct_2(leftShoulder, leftHip, leftKnee, rightShoulder, rightHip, rightKnee)
+    posture_correct = is_posture_correct(leftWrist, leftShoulder, rightWrist, rightShoulder)
+
+    if posture_correct:
+        if rgb_led.get_color() != GREEN_COLOR:
+            rgb_led.set_color(GREEN_COLOR)
+    else:
+        if rgb_led.get_color() != RED_COLOR:
+            rgb_led.set_color(RED_COLOR)
+
+    leftElbowAngle = math.degrees(math.atan2(leftWrist.y - leftElbow.y, leftWrist.x - leftElbow.x) - math.atan2(leftShoulder.y - leftElbow.y, leftShoulder.x - leftElbow.x))
+    rightElbowAngle = math.degrees(math.atan2(rightWrist.y - rightElbow.y, rightWrist.x - rightElbow.y) - math.atan2(rightShoulder.y - rightElbow.y, rightShoulder.x - rightElbow.x))
+
+    # leftElbowAngle = int(np.interp(leftElbowAngle, [-30, 170], [170, -30]))
+    # rightElbowAngle = int(np.interp(rightElbowAngle, [40, 170], [170, 40]))
+
+    #print(leftElbowAngle, rightElbowAngle)
+
+    #leftElbowAngle = int(np.interp(leftElbowAngle, [-70, 180], [100, 0]))
+    #leftElbowAngle = int(np.interp(leftElbowAngle, [-30, 180], [100, 0]))
+    #rightElbowAngle = int(np.interp(rightElbowAngle, [135, 190], [100, 0]))
+    #rightElbowAngle = int(np.interp(rightElbowAngle, [34, 173], [100, 0]))
+
+    #print(leftElbowAngle, rightElbowAngle)
+
+    #if leftElbowAngle >= 70 and rightElbowAngle >= 70:
+    #    if direction == DOWN:
+    #        count += 0.5
+    #        direction = UP
+
+    #        if posture_correct:
+    #            correct_count += 0.5
+    #        else:
+    #            incorrect_count += 0.5
+    #if leftElbowAngle <= 70 and rightElbowAngle <= 70:
+    #    if direction == UP:
+    #        count += 0.5
+    #        direction = DOWN
+
+    #        if posture_correct:
+    #            correct_count += 0.5
+    #        else:
+    #            incorrect_count += 0.5
+
+    leftElbowAngle = 0
+    a = np.array([leftShoulder.x, leftShoulder.y])
+    b = np.array([leftElbow.x, leftElbow.y])
+    c = np.array([leftWrist.x, leftWrist.y])
+
+    radians = np.arctan2(c[1] - b[1], c[0] - b [0]) - np.arctan2(a[1] - b[1], a[0] - b[0])
+    angle = np.abs(radians * 180.0 / np.pi)
+    if angle > 180.0:
+        angle = 360 - angle
+
+    leftElbowAngle = angle
+
+    #if direction == DOWN:
+    #    print(f"angle = {leftElbowAngle}, direction=down, count={count}, correct_count={correct_count}, incorrect_count={incorrect_count}")
+    #else:
+    #    print(f"angle = {leftElbowAngle}, direction=up, count={count}, correct_count={correct_count}, incorrect_count={incorrect_count}")
+
+    if leftElbowAngle > 160 and direction == DOWN:
+        #print("INCREASE")
+        direction = UP
+        count += 1
+
+        if posture_correct:
+            correct_count += 1
+        else:
+            incorrect_count += 1
+
+    if leftElbowAngle > 160:
+        direction = UP
+
+    if leftElbowAngle < 110 and direction == UP:
+        direction= DOWN
+
+    #cv2.rectangle(frame, (0, 0), (120, 120), (255, 0, 0), -1)
+    #cv2.putText(frame, str(int(count)), (20, 70), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, 1.6, (0, 0, 255), 7)
+
+# sensors functions (GPIO functions)
+
+def read_distance():
+	global distance
+	global ultrasonic_ranging
+	global stop_event
+
+	while not stop_event.is_set():
+		distance = ultrasonic_ranging.distance()
+		time.sleep(0.5)
+
+def set_color():
+	global color
+	global rgb_led
+	global stop_event
+		
+	while not stop_event.is_set():
+		if rgb_led.get_color != color:
+			rgb_led.set_color(color)
+			time.sleep(0.5)
+
+def is_touched():
+	global touched
+	global touch_switch
+
+	while not stop_event.is_set():
+		touched = touch_switch.is_touched()
+
+		if touched:
+			print("Touched.")
+		else:
+			print("Not-touched")
+			
+		time.sleep(1)
+		
+def detect(state):
+	print(f"Push button is pressed - {state}")
+	if state == 1:
+		end_session()
+    
+def main():
+    global ultrasonic_ranging
+    global rgb_led
+    global button
+    global stop_event
+    global count
+    
+    begin_session()
+
+    ultrasonic_ranging = UltrasonicRanging()
+    rgb_led = RgbLed()
+    button = Button(detect)
+
+    stop_event = threading.Event()
+
+    ultrasonic_ranging_thread = threading.Thread(target=read_distance, name="ultrasonic_ranging_thread")
+    rgb_led_thread = threading.Thread(target=set_color, name="rgb_led_thread")
+    rgb_led_thread.start()
+    ultrasonic_ranging_thread.start()
 
     sock1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # Allow quick rebind after restart
     sock1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock1.bind((HOST, PORT1))
+    sock2.bind((HOST, PORT2))
+    sock1.setblocking(False)
+    sock2.setblocking(False)
+
+    pd1 = PoseDetector(trackCon=0.70, detectionCon=0.70)
+    pd2 = PoseDetector(trackCon=0.70, detectionCon=0.70)
+
+    last_frame1 = None
+    last_frame2 = None
+    win = "Pushup Counter Server Program"
+    cv2.namedWindow(win)
+    print(f"Listening on {HOST}:{PORT1} and {HOST}:{PORT2} (press 'q' to quit)")
+
     try:
-        # SO_REUSEPORT not available on some platforms; ignore if it fails
-        sock1.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_REUSEPORT", 15), 1)
-        sock2.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_REUSEPORT", 15), 1)
-    except OSError:
-        pass
+        while True:
+            readable, _, _ = select.select([sock1, sock2], [], [], 0.05)
 
-    sock1.bind((HOST1, PORT1))
-    sock1.settimeout(0.1)  # so we can still process GUI events
+            for s in readable:
+                try:
+                    data, addr = s.recvfrom(65535)
+                except BlockingIOError:
+                    continue
 
-    sock2.bind((HOST2, PORT2))
-    sock2.settimeout(0.1)  # so we can still process GUI events
+                if s is sock1:
+                    f = decode_jpeg_to_bgr(data)
+                    if f is not None:
+                        pd1.findPose(f, draw=1)
+                        last_frame1 = f
+                elif s is sock2:
+                    f = decode_jpeg_to_bgr(data)
+                    if f is not None:
+                        pd2.findPose(f, draw=1)
+                        last_frame2 = f
+                else:
+                    print("readable is not both sock1 nor sock2")
 
-    pd = PoseDetector(trackCon = 0.70, detectionCon = 0.70) # Track Confidence and Detection Confidence
+            # Display whatever we have so far
+            if last_frame1 is not None and last_frame2 is not None:
+                # match heights before hstack
+                h = min(last_frame1.shape[0], last_frame2.shape[0])
+                f1 = cv2.resize(last_frame1, (int(last_frame1.shape[1]*h/last_frame1.shape[0]), h))
+                f2 = cv2.resize(last_frame2, (int(last_frame2.shape[1]*h/last_frame2.shape[0]), h))
 
-    print(f"Listening on {HOST1}:{PORT1} and {HOST2}:{PORT2} (press 'q' in OpenCV window to quit)")
-    while True:
-        try:
-            data1, _ = sock1.recvfrom(65535)   # one full JPEG per datagram
-        except socket.timeout:
-            # No new frame right now; proceed to handle UI
-            data1 = None
+                if is_person_present():
+                    # lmlist = LandMarker List https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
+                    lmList1, _ = pd1.findPosition(f1, draw = 0, bboxWithHands = 0) 
+                    if len(lmList1) > 17:
+                        #angles(f1, lmList1[MediaPipe.LEFT_SHOULDER], lmList1[MediaPipe.LEFT_ELBOW], lmList1[MediaPipe.LEFT_WRIST], lmList1[MediaPipe.LEFT_HIP], lmList1[MediaPipe.LEFT_KNEE], lmList1[MediaPipe.RIGHT_SHOULDER], lmList1[MediaPipe.RIGHT_ELBOW], lmList1[MediaPipe.RIGHT_WRIST], lmList1[MediaPipe.RIGHT_HIP], lmList1[MediaPipe.RIGHT_KNEE], drawPoints = 0)
+                        angles(f1, lmList1[MediaPipe.LEFT_SHOULDER], lmList1[MediaPipe.LEFT_ELBOW], lmList1[MediaPipe.LEFT_WRIST], lmList1[MediaPipe.RIGHT_SHOULDER], lmList1[MediaPipe.RIGHT_ELBOW], lmList1[MediaPipe.RIGHT_WRIST], drawPoints = 0)
+                    lmList2, _ = pd1.findPosition(f2, draw = 0, bboxWithHands = 0)
+                    if len(lmList2) > 17:
+                        #angles(f2, lmList2[MediaPipe.LEFT_SHOULDER], lmList2[MediaPipe.LEFT_ELBOW], lmList2[MediaPipe.LEFT_WRIST], lmList2[MediaPipe.LEFT_HIP], lmList2[MediaPipe.LEFT_KNEE], lmList2[MediaPipe.RIGHT_SHOULDER], lmList2[MediaPipe.RIGHT_ELBOW], lmList2[MediaPipe.RIGHT_WRIST], lmList2[MediaPipe.RIGHT_HIP], lmList2[MediaPipe.RIGHT_KNEE], drawPoints = 0)
+                        angles(f2, lmList2[MediaPipe.LEFT_SHOULDER], lmList2[MediaPipe.LEFT_ELBOW], lmList2[MediaPipe.LEFT_WRIST], lmList2[MediaPipe.RIGHT_SHOULDER], lmList2[MediaPipe.RIGHT_ELBOW], lmList2[MediaPipe.RIGHT_WRIST], drawPoints = 0)
 
-        try:
-            data2, _ = sock2.recvfrom(65535)
-        except socket.timeout:
-            data2 = None
+                combined = np.hstack((f1, f2))
+                cv2.imshow(win, combined)
+            elif last_frame1 is not None:
+                f1 = last_frame1
 
-        if data1 and data2:
-            arr1 = np.frombuffer(data1, dtype=np.uint8)
-            frame1 = cv2.imdecode(arr1, cv2.IMREAD_COLOR)
-            arr2 = np.frombuffer(data2, dtype=np.uint8)
-            frame2 = cv2.imdecode(arr2, cv2.IMREAD_COLOR)
-            
-            if frame1 is not None and frame2 is not None:
-                pd.findPose(frame1, draw = 1)
-                pd.findPose(frame2, draw = 1)
-                # lmList, bBox = pd.findPosition(frame, draw = 0, bboxWithHands = 0) # lmlist = LandMarker List https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
+                if is_person_present():
+                    lmList1, _ = pd1.findPosition(f1, draw = 0, bboxWithHands = 0)
+                    #print(lmList1)
+                    if len(lmList1) > 17:
+                        #angles(f1, lmList1[MediaPipe.LEFT_SHOULDER], lmList1[MediaPipe.LEFT_ELBOW], lmList1[MediaPipe.LEFT_WRIST], lmList1[MediaPipe.LEFT_HIP], lmList1[MediaPipe.LEFT_KNEE], lmList1[MediaPipe.RIGHT_SHOULDER], lmList1[MediaPipe.RIGHT_ELBOW], lmList1[MediaPipe.RIGHT_WRIST], lmList1[MediaPipe.RIGHT_HIP], lmList1[MediaPipe.RIGHT_KNEE], drawPoints = 0)
+                        angles(f1, lmList1[MediaPipe.LEFT_SHOULDER], lmList1[MediaPipe.LEFT_ELBOW], lmList1[MediaPipe.LEFT_WRIST], lmList1[MediaPipe.RIGHT_SHOULDER], lmList1[MediaPipe.RIGHT_ELBOW], lmList1[MediaPipe.RIGHT_WRIST], drawPoints = 0)
+                cv2.rectangle(f1, (0, 0), (120, 120), (255, 0, 0), -1)
+                cv2.putText(f1, str(int(count)), (20, 70), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, 1.6, (0, 0, 255), 7)
+                cv2.imshow(win, f1)
+                
+            elif last_frame2 is not None:
+                f2 = last_frame2
 
-                combined_image = np.hstack((frame1, frame2))
+                if is_person_present():
+                    lmList2, _ = pd1.findPosition(f2, draw = 0, bboxWithHands = 0)
+                    #print(lmList2)
+                    if len(lmList2) > 17:
+                        #angles(f2, lmList2[MediaPipe.LEFT_SHOULDER], lmList2[MediaPipe.LEFT_ELBOW], lmList2[MediaPipe.LEFT_WRIST], lmList2[MediaPipe.LEFT_HIP], lmList2[MediaPipe.LEFT_KNEE], lmList2[MediaPipe.RIGHT_SHOULDER], lmList2[MediaPipe.RIGHT_ELBOW], lmList2[MediaPipe.RIGHT_WRIST], lmList2[MediaPipe.RIGHT_HIP], lmList2[MediaPipe.RIGHT_KNEE], drawPoints = 0)
+                        angles(f2, lmList2[MediaPipe.LEFT_SHOULDER], lmList2[MediaPipe.LEFT_ELBOW], lmList2[MediaPipe.LEFT_WRIST], lmList2[MediaPipe.RIGHT_SHOULDER], lmList2[MediaPipe.RIGHT_ELBOW], lmList2[MediaPipe.RIGHT_WRIST], drawPoints = 0)
 
-                # Display the combined image
-                cv2.imshow('Server frames', combined_image)
-                # cv2.imshow("UDP Client — latest frame", frame)
-            elif frame1 is not None and frame2 is None:
-                pd.findPose(frame1, draw = 1)
-                # lmList, bBox = pd.findPosition(frame, draw = 0, bboxWithHands = 0) # lmlist = LandMarker List https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
+                cv2.imshow(win, f2)
+            else:
+                # nothing received yet; keep window responsive
+                print("frames are not available.")
+                cv2.imshow(win, np.zeros((240, 320, 3), dtype=np.uint8))
+                time.sleep(5)
 
-                cv2.imshow("Server frames", frame1)
-            elif frame2 is not None and frame1 is None:
-                pd.findPose(frame2, draw = 1)
-                # lmList, bBox = pd.findPosition(frame, draw = 0, bboxWithHands = 0) # lmlist = LandMarker List https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
+            if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+                break
+    finally:
+        cv2.destroyAllWindows()
+        sock1.close()
+        sock2.close()
+        print("Sockets are closed")
 
-                cv2.imshow("Server frames", frame2)
-        else:
-            print("data not found")
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    cv2.destroyAllWindows()
-    sock1.close()
-    sock2.close()
+        stop_event.set()
+        print("Stop event is set")
+        ultrasonic_ranging_thread.join()
+        print("Ultrasonic ranging thread is killed")
+        rgb_led_thread.join()
+        print("RGB LED thread is killed")
+        
+        rgb_led.destroy()
+        ultrasonic_ranging.destroy()
+        button.destroy()
 
 if __name__ == "__main__":
     main()
